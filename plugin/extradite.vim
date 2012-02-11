@@ -12,6 +12,10 @@ if !exists('g:extradite_width')
     let g:extradite_width = 60
 endif
 
+if !exists('g:extradite_showhash')
+    let g:extradite_showhash = 0
+endif
+
 autocmd User Fugitive command! -buffer -bang Extradite :execute s:Extradite(<bang>0)
 
 autocmd Syntax extradite call s:ExtraditeSyntax()
@@ -50,6 +54,9 @@ function! s:Extradite(bang) abort
     " doesn't seem to work
     nnoremap <buffer> <silent> t    :let line=line('.')<cr> :<C-U>exe <SID>ExtraditeDiffToggle()<CR> :exe line<cr>
     autocmd CursorMoved <buffer>    exe 'setlocal statusline='.escape(b:extradata_list[line(".")-1]['date'], ' ')
+    autocmd BufEnter <buffer>       call s:ExtraditeSyntax()
+    autocmd BufLeave <buffer>       hi! link CursorLine NONE
+    autocmd BufLeave <buffer>       hi! link Cursor NONE
     call s:ExtraditeDiffToggle()
     let g:extradite_bufnr = bufnr('')
     return ''
@@ -65,7 +72,12 @@ function! s:ExtraditeLoadCommitData(bang, base_file_name, template_cmd, ...) abo
     let path = ''
   endif
 
-  let cmd = a:template_cmd + ['--pretty=format:\%an	\%d	\%s', '--', path]
+  let git_cmd = fugitive#buffer().repo().git_command()
+  if (g:extradite_showhash)
+    let cmd = a:template_cmd + ['--pretty=format:\%h	\%an	\%d	\%s', '--', path]
+  else
+    let cmd = a:template_cmd + ['--pretty=format:\%an	\%d	\%s', '--', path]
+  endif
   let basecmd = call(fugitive#buffer().repo().git_command,cmd,fugitive#buffer().repo())
   let extradata_cmd = a:template_cmd + ['--pretty=format:%h	%ad', '--', path]
   let extradata_basecmd = call(fugitive#buffer().repo().git_command,extradata_cmd,fugitive#buffer().repo())
@@ -95,6 +107,7 @@ function! s:ExtraditeLoadCommitData(bang, base_file_name, template_cmd, ...) abo
 
   " this must happen after we create the Extradite buffer so that
   " b:extradata_list gets placed in the right buffer
+  let b:git_cmd = git_cmd
   let extradata_str = system(extradata_basecmd)
   let extradata = split(extradata_str, '\n')
   let b:extradata_list = []
@@ -162,19 +175,25 @@ endfunction
 
 function! s:ExtraditeSyntax() abort
   let b:current_syntax = 'extradite'
-  syn match FugitivelogName "\(\w\| \)\+\t"
-  syn match FugitivelogTag "(.*)\t"
-  hi def link FugitivelogName       String
-  hi def link FugitivelogTag        Identifier
-  hi! def link CursorLine           Visual
+  if (g:extradite_showhash)
+    syn match ExtraditeLogId "^\(\w\)\+"
+    syn match ExtraditeLogName "\t\(\w\| \)\+\t"
+    hi def link ExtraditeLogId Comment
+  else
+    syn match ExtraditeLogName "^\(\w\| \)\+\t"
+  endif
+  syn match ExtraditeLogTag "(.*)\t"
+  hi def link ExtraditeLogName String
+  hi def link ExtraditeLogTag Identifier
+  hi! link CursorLine           Visual
   " make the cursor less obvious. has no effect on xterm
-  hi! def link Cursor               Visual
+  hi! link Cursor               Visual
 endfunction
 
 function! s:ExtraditeDiffToggle() abort
   if !exists('b:extradite_simplediff_bufnr') || b:extradite_simplediff_bufnr == -1
     augroup extradite
-      autocmd CursorMoved <buffer> call s:SimpleFileDiff(s:ExtraditePath('~1'), s:ExtraditePath())
+      autocmd CursorMoved <buffer> call s:SimpleFileDiff(b:git_cmd,s:ExtraditePath('~1'), s:ExtraditePath())
       " vim seems to get confused if we jump around buffers during a CursorMoved event. Moving the cursor
       " around periodically helps vim figure out where it should really be.
       autocmd CursorHold <buffer>  normal! lh
@@ -188,8 +207,8 @@ endfunction
 
 " Does a git diff on a single file and discards the top few lines of extraneous
 " information
-function! s:SimpleFileDiff(a,b) abort
-  call s:SimpleDiff(a:a,a:b)
+function! s:SimpleFileDiff(git_cmd,a,b) abort
+  call s:SimpleDiff(a:git_cmd,a:a,a:b)
   let win = bufwinnr(b:extradite_simplediff_bufnr)
   exe 'keepjumps '.win.'wincmd w'
   setlocal modifiable
@@ -200,7 +219,7 @@ endfunction
 
 " Does a git diff of commits a and b. Will create one simplediff-buffer that is
 " unique wrt the buffer that it is invoked from.
-function! s:SimpleDiff(a,b) abort
+function! s:SimpleDiff(git_cmd,a,b) abort
 
   if !exists('b:extradite_simplediff_bufnr') || b:extradite_simplediff_bufnr == -1
     belowright split
@@ -224,11 +243,12 @@ function! s:SimpleDiff(a,b) abort
 
   setlocal modifiable
     silent! %delete _
-    let diff = system('git diff '.a:a.' '.a:b)
+    let diff = system(a:git_cmd.' diff --no-ext-diff '.a:a.' '.a:b)
     silent put = diff
   setlocal ft=diff buftype=nofile nomodifiable
 
   let b:files = { 'a': a:a, 'b': a:b }
+  normal! zR
   keepjumps wincmd p
 
 endfunction
